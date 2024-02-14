@@ -9,6 +9,6 @@ Password：3nux
 ## Installation
 Step 1: Download the datasets.
 
-Step 2: The dataset path in the Constant.java file should be changed to the path where your machine stores the dataset.
+Step 2: The datasets path in the Constant.java file should be changed to the path where your machine stores the datasets.
 
 Step 3: Click on the file inside the 'test' package to run it.
