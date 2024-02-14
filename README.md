@@ -1,8 +1,6 @@
 ## Mini-Hes：A Parallelizable Second-order Latent Factor Analysis Model
 
-![image](https://github.com/Goallow/Mini-Hes/assets/23376459/1e17df79-aac4-4666-ab1a-c0f3411f1068)
-
-
+![屏幕截图 2024-02-15 041013](https://github.com/Goallow/Mini-Hes/assets/23376459/7e909dbf-72f7-4ac5-b25b-17254fb461b3)
 
 ## Datasets
 Link：https://pan.baidu.com/s/1J2GsTt7QCxCCDsKxf-d-4w?pwd=3nux 
