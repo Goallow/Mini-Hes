@@ -8,8 +8,8 @@ Link：https://pan.baidu.com/s/1J2GsTt7QCxCCDsKxf-d-4w?pwd=3nux
 Password：3nux 
 
 ## Installation
-Step 1: Download the model and datasets.
+Step 1: Download the model and dataset.
 
-Step 2: The datasets path in the Constant.java file should be changed to the path where your machine stores the datasets.
+Step 2: Modify the dataset path inside the Constant.java file.
 
 Step 3: Run the Java file inside the 'test' package.
