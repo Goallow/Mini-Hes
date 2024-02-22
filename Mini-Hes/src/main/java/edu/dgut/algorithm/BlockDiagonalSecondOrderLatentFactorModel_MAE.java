@@ -78,6 +78,9 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
 
     private Map<Integer, List<Entry>> itemListMap;
 
+    private Future<?>[] userFutures;
+    private Future<?>[] itemFutures;
+
     private boolean converge;
     private double MAE;
     private double validationMAE;
@@ -102,9 +105,8 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
     private double sumRound;
 
 
-    private ExecutorService userExecutorService;
+    private ExecutorService executorService;
 
-    private ExecutorService itemExecutorService;
 
     public BlockDiagonalSecondOrderLatentFactorModel_MAE() throws IOException {
         /** 初始化数据集合 */
@@ -144,12 +146,16 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
 
         this.userSet = new HashSet<>();
         this.itemSet = new HashSet<>();
+
         for (Entry entry : this.trainEntryList) {
             this.userSet.add(entry.getUserId());
             this.itemSet.add(entry.getItemId());
             this.userCount[entry.getUserId()] += 1;
             this.itemCount[entry.getItemId()] += 1;
         }
+
+        this.userFutures = new Future<?>[this.userSet.size()];
+        this.itemFutures = new Future<?>[this.itemSet.size()];
 
         this.userListMap = FileUtil.getUserListMap(this.trainEntryList);
         this.itemListMap = FileUtil.getItemListMap(this.trainEntryList);
@@ -161,8 +167,8 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
         this.featureDimension = Constant.FEATURE_DIMENSION;
         this.threadNum = Runtime.getRuntime().availableProcessors() / 2;
 
-        this.userExecutorService = newFixedThreadPool(threadNum);
-        this.itemExecutorService = newFixedThreadPool(threadNum);
+        this.executorService = newFixedThreadPool(threadNum);
+
         this.innerLoop = Constant.K;
         this.maxEpoch = Constant.MAX_TRAINING_ROUND;
         this.modelOutputString = new ArrayList<>();
@@ -179,14 +185,12 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
         this.tolerance = tolerance;
         this.lambda = lambda;
         this.threadNum = threadNum;
-        this.userExecutorService = newFixedThreadPool(threadNum);
-        this.itemExecutorService = newFixedThreadPool(threadNum);
+        this.executorService = newFixedThreadPool(threadNum);
         this.modelOutputString = modelOutputString;
     }
 
 
     public double[] run() throws InterruptedException, ExecutionException, BrokenBarrierException {
-        ExecutorService executor = newFixedThreadPool(2);
         int t = 1;
         this.startTime = 0.0;
         this.realEndTime = 0.0;
@@ -195,88 +199,23 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
         this.sumTime = 0.0;
         double[] results = new double[9];
         while ((t <= this.maxEpoch) && (!converge)) {
+
             this.startTime = System.currentTimeMillis();
 
-            Future<?> userGradientTask = executor.submit(() -> {
-                try {
-                    this.computeUserGradient();
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                } catch (ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            Future<?> itemGradientTask = executor.submit(() -> {
-                try {
-                    this.computeItemGradient();
-                } catch (InterruptedException | ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
+            this.computeUserGradient();
+            this.computeItemGradient();
 
-            try {
-                userGradientTask.get();
-                itemGradientTask.get();
-            } catch (ExecutionException e) {
-                e.printStackTrace();
-            }
+            this.singleUserHessianFreeConjugateGradientDescent();
+            this.singleItemHessianFreeConjugateGradientDescent();
 
+            this.updateUserMatrix();
+            this.updateItemMatrix();
 
-
-            // Submit tasks to the thread pool
-            Future<?> userTask = executor.submit(() -> {
-                try {
-                    this.singleUserHessianFreeConjugateGradientDescent();
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                } catch (BrokenBarrierException e) {
-                    throw new RuntimeException(e);
-                } catch (ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-
-            Future<?> itemTask = executor.submit(() -> {
-                try {
-                    this.singleItemHessianFreeConjugateGradientDescent();
-                } catch (InterruptedException | ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            // Wait for tasks to complete
-            try {
-                userTask.get();
-                itemTask.get();
-            } catch (ExecutionException e) {
-                e.printStackTrace();
-            }
-
-            Future<?> userUpdateTask = executor.submit(() -> {
-                try {
-                    this.updateUserMatrix();
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                } catch (ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            Future<?> itemUpdateTask = executor.submit(() -> {
-                try {
-                    this.updateItemMatrix();
-                } catch (InterruptedException | ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            try {
-                userUpdateTask.get();
-                itemUpdateTask.get();
-            } catch (ExecutionException e) {
-                e.printStackTrace();
-            }
             this.endTime = System.currentTimeMillis();
             this.sumTime += (this.endTime - this.startTime);
             this.sumRound = t;
             this.convergenceAnalysis(t);
+
             t += 1;
         }
         results[1] = this.validationMAE;
@@ -289,16 +228,15 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
         results[8] = this.sumRound;
         System.out.println("运行时间(s) = " + sumTime / 1000);
         // Shut down the thread pool
-        executor.shutdown();
-        this.userExecutorService.shutdown();
-        this.itemExecutorService.shutdown();
+        executorService.shutdown();
         return results;
     }
 
     public void computeUserGradient() throws ExecutionException, InterruptedException {
-        List<Future<?>> futures = new ArrayList<>();
+        // List<Future<?>> futures = new ArrayList<>();
+        int index = 0;
         for (Integer u : this.userSet) {
-            Future<?> future = userExecutorService.submit(() -> {
+            Future<?> future = executorService.submit(() -> {
                 MatrixUtil.reset(this.userGradientMatrix[u]);
                 List<Entry> entries = this.userListMap.get(u);
                 for (Entry entry : entries) {
@@ -311,17 +249,19 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
                     }
                 }
             });
-            futures.add(future);
+            this.userFutures[index] = future;
+            index += 1;
         }
         // 等待所有线程执行完成
-        for (Future<?> future : futures) {
+        for (Future<?> future : this.userFutures) {
             future.get(); // 等待线程执行完成
         }
     }
     public void computeItemGradient() throws ExecutionException, InterruptedException {
-        List<Future<?>> futures = new ArrayList<>();
+        // List<Future<?>> futures = new ArrayList<>();
+        int index = 0;
         for (Integer i : this.itemSet) {
-            Future<?> future = itemExecutorService.submit(() -> {
+            Future<?> future = executorService.submit(() -> {
                 MatrixUtil.reset(this.itemGradientMatrix[i]);
                 List<Entry> entries = this.itemListMap.get(i);
                 for (Entry entry : entries) {
@@ -334,33 +274,36 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
                     }
                 }
             });
-            futures.add(future);
+            // futures.add(future);
+            this.itemFutures[index] = future;
+            index += 1;
         }
 
         // 等待所有线程执行完成
-        for (Future<?> future : futures) {
+        for (Future<?> future : this.itemFutures) {
             future.get(); // 等待线程执行完成
         }
     }
 
     public void singleUserHessianFreeConjugateGradientDescent() throws InterruptedException, BrokenBarrierException, ExecutionException {
-        List<Future<?>> futures = new ArrayList<>();
+        // List<Future<?>> futures = new ArrayList<>();
+        int index = 0;
         for (Integer u : this.userSet) {
-            Future<?> future = userExecutorService.submit(() -> {
-                MatrixUtil.reset(this.userDirectionMatrix[u]);
+            Future<?> future = executorService.submit(() -> {
+
                 MatrixUtil.reset(this.userIncrementMatrix[u]);
                 MatrixUtil.copy(this.userGradientMatrix[u], this.userDirectionMatrix[u]);
-                double[] rau = new double[this.innerLoop + 1];
-                rau[0] = MatrixUtil.getFrobeniusNorm(this.userDirectionMatrix[u]);
+                double preRau = 0.0D;
+                double rau = MatrixUtil.getFrobeniusNorm(this.userDirectionMatrix[u]);
 
                 for (int t = 1; t <= this.innerLoop; t++) {
-                    if (Math.sqrt(rau[t - 1]) < this.tolerance) {
+                    if (Math.sqrt(rau) < this.tolerance) {
                         break;
                     }
                     if (t == 1) {
                         MatrixUtil.copy(this.userDirectionMatrix[u], this.userVectorMatrix[u]);
                     } else {
-                        double coefficient = rau[t - 1] / rau[t - 2];
+                        double coefficient = rau / preRau;
                         for (int d = 1; d <= this.featureDimension; d++) {
                             this.userVectorMatrix[u][d] = this.userDirectionMatrix[u][d]
                                     + coefficient * this.userVectorMatrix[u][d];
@@ -369,77 +312,76 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
 
                     singleUserHessianVectorProduct(u);
 
-                    double alpha = 0.0D;
-                    double alphaUp = rau[t - 1];
+                    double alphaUp = rau;
                     double alphaDown = MatrixUtil.innerProduct(this.userVectorMatrix[u], this.userGaussNewtonMatrix[u]);
-                    if (alphaDown != 0) {
-                        alpha = alphaUp / alphaDown;
-                    } else {
-                        alpha = 0.00001;
-                    }
+                    double alpha = alphaUp / alphaDown;
 
                     for (int d = 1; d <= this.featureDimension; d++) {
                         this.userIncrementMatrix[u][d] += alpha * this.userVectorMatrix[u][d];
                         this.userDirectionMatrix[u][d] -= alpha * this.userGaussNewtonMatrix[u][d];
                     }
-                    rau[t] = MatrixUtil.getFrobeniusNorm(this.userDirectionMatrix[u]);
-                }
 
+                    preRau = rau;
+                    rau = MatrixUtil.getFrobeniusNorm(this.userDirectionMatrix[u]);
+                }
             });
-            futures.add(future);
+            // futures.add(future);
+            this.userFutures[index] = future;
+            index += 1;
         }
 
         // 等待所有线程执行完成
-        for (Future<?> future : futures) {
+        for (Future<?> future : this.userFutures) {
             future.get(); // 等待线程执行完成
         }
     }
-    public void singleItemHessianFreeConjugateGradientDescent() throws InterruptedException, ExecutionException {
 
-        List<Future<?>> futures = new ArrayList<>();
+    public void singleItemHessianFreeConjugateGradientDescent() throws InterruptedException, ExecutionException {
+        // List<Future<?>> futures = new ArrayList<>();
+        int index = 0;
         for (Integer i : this.itemSet) {
-            Future<?> future = itemExecutorService.submit(() -> {
+            Future<?> future = executorService.submit(() -> {
+
                 MatrixUtil.reset(this.itemIncrementMatrix[i]);
-                MatrixUtil.reset(this.itemDirectionMatrix[i]);
                 MatrixUtil.copy(this.itemGradientMatrix[i], this.itemDirectionMatrix[i]);
-                double[] rau = new double[this.innerLoop + 1];
-                rau[0] = MatrixUtil.getFrobeniusNorm(this.itemDirectionMatrix[i]);
+                double preRau = 0.0D;
+                double rau = MatrixUtil.getFrobeniusNorm(this.itemDirectionMatrix[i]);
 
                 for (int t = 1; t <= this.innerLoop; t++) {
-                    if (Math.sqrt(rau[t - 1]) < this.tolerance) {
+                    if (Math.sqrt(rau) < this.tolerance) {
                         break;
                     }
                     if (t == 1) {
                         MatrixUtil.copy(this.itemDirectionMatrix[i], this.itemVectorMatrix[i]);
                     } else {
-                        double coefficient = rau[t - 1] / rau[t - 2];
+                        double coefficient = rau / preRau;
                         for (int d = 1; d <= this.featureDimension; d++) {
                             this.itemVectorMatrix[i][d] = this.itemDirectionMatrix[i][d]
                                     + coefficient * this.itemVectorMatrix[i][d];
                         }
                     }
+
                     singleItemHessianVectorProduct(i);
-                    double alpha = 0.0;
-                    double alphaUp = rau[t - 1];
+
+                    double alphaUp = rau;
                     double alphaDown = MatrixUtil.innerProduct(this.itemVectorMatrix[i], this.itemGaussNewtonMatrix[i]);
-                    if (alphaDown != 0) {
-                        alpha = alphaUp / alphaDown;
-                    } else {
-                        alpha = 0.00001;
-                    }
+                    double alpha = alphaUp / alphaDown;
 
                     for (int d = 1; d <= this.featureDimension; d++) {
                         this.itemIncrementMatrix[i][d] += alpha * this.itemVectorMatrix[i][d];
                         this.itemDirectionMatrix[i][d] -= alpha * this.itemGaussNewtonMatrix[i][d];
                     }
-                    rau[t] = MatrixUtil.getFrobeniusNorm(this.itemDirectionMatrix[i]);
+                    preRau = rau;
+                    rau = MatrixUtil.getFrobeniusNorm(this.itemDirectionMatrix[i]);
                 }
             });
-            futures.add(future);
+            // futures.add(future);
+            this.itemFutures[index] = future;
+            index += 1;
         }
 
         // 等待所有线程执行完成
-        for (Future<?> future : futures) {
+        for (Future<?> future : this.itemFutures) {
             future.get(); // 等待线程执行完成
         }
     }
@@ -481,34 +423,40 @@ public class BlockDiagonalSecondOrderLatentFactorModel_MAE {
         }
     }
     public void updateUserMatrix() throws ExecutionException, InterruptedException {
-        List<Future<?>> futures = new ArrayList<>();
+        // List<Future<?>> futures = new ArrayList<>();
+        int index = 0;
         for (Integer u : this.userSet) {
-            Future<?> future = userExecutorService.submit(() -> {
+            Future<?> future = executorService.submit(() -> {
                 for (int d = 1; d <= this.featureDimension; d++) {
                     this.userMatrix[u][d] += this.learningRate * this.userIncrementMatrix[u][d];
                 }
             });
-            futures.add(future);
+            // futures.add(future);
+            this.userFutures[index] = future;
+            index += 1;
         }
         // 等待所有线程执行完成
-        for (Future<?> future : futures) {
+        for (Future<?> future : this.userFutures) {
             future.get(); // 等待线程执行完成
         }
     }
 
     public void updateItemMatrix() throws ExecutionException, InterruptedException {
-        List<Future<?>> futures = new ArrayList<>();
+        // List<Future<?>> futures = new ArrayList<>();
+        int index = 0;
         for (Integer i : this.itemSet) {
-            Future<?> future = itemExecutorService.submit(() -> {
+            Future<?> future = executorService.submit(() -> {
                 for (int d = 1; d <= this.featureDimension; d++) {
                     this.itemMatrix[i][d] += this.learningRate * this.itemIncrementMatrix[i][d];
                 }
             });
-            futures.add(future);
+            // futures.add(future);
+            this.itemFutures[index] = future;
+            index += 1;
         }
 
         // 等待所有线程执行完成
-        for (Future<?> future : futures) {
+        for (Future<?> future : this.itemFutures) {
             future.get(); // 等待线程执行完成
         }
     }
