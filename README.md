@@ -2,6 +2,8 @@
 
 ![屏幕截图 2024-02-15 041013](https://github.com/Goallow/Mini-Hes/assets/23376459/7e909dbf-72f7-4ac5-b25b-17254fb461b3)
 
+Please see [this paper](https://arxiv.org/abs/2402.11948) for more details on the Mini-Hes algorithm.
+
 ## Datasets
 Link：https://pan.baidu.com/s/1J2GsTt7QCxCCDsKxf-d-4w?pwd=3nux 
 
